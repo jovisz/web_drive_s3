@@ -46,10 +46,10 @@ USERS = {
     'user1': {'password': '123456', 'prefix': 'user1/'}
 }
 
-AWS_ACCESS_KEY_ID = "your-access-key"
-AWS_SECRET_ACCESS_KEY = "your-secret-key"
+AWS_ACCESS_KEY = "your-access-key"
+AWS_SECRET_KEY = "your-secret-key"
 S3_BUCKET = "your-s3-bucket"
-S3_REGION = "your-region"
+AWS_REGION = "your-region"
 ```
 
 - Admin (`prefix=''`) can access the entire bucket
