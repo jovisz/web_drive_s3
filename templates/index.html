@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>S3 Web Drive</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="p-4 bg-light">
+  <div class="container">
+
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h4 class="mb-0">📂 S3 Web Drive</h4>
+      <div class="d-flex">
+        <button class="btn btn-secondary me-2" onclick="showNewFolderModal()">+ New Folder</button>
+        <form id="uploadForm" action="/upload?prefix={{ prefix }}" method="post" enctype="multipart/form-data">
+          <input type="file" name="files" id="uploadInput" multiple hidden onchange="uploadWithProgress()">
+          <button type="button" class="btn btn-primary" onclick="document.getElementById('uploadInput').click()">Upload</button>
+        </form>
+        <a href="/logout" class="btn btn-outline-danger ms-2">Logout</a>
+      </div>
+    </div>
+
+    <!-- Upload Progress -->
+    <div class="progress mb-3" id="uploadProgressWrapper" style="height: 20px; display: none;">
+      <div class="progress-bar progress-bar-striped progress-bar-animated bg-success" role="progressbar"
+           id="uploadProgressBar" style="width: 0%">0%</div>
+    </div>
+
+    <!-- Breadcrumb -->
+    <nav aria-label="breadcrumb" class="mb-3">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{{ url_for('index') }}">Home</a></li>
+        {% set ns = namespace(path="") %}
+        {% for segment in prefix.strip("/").split("/") if segment %}
+          {% set ns.path = ns.path + segment + "/" %}
+          <li class="breadcrumb-item">
+            <a href="{{ url_for('index', prefix=ns.path) }}">{{ segment }}</a>
+          </li>
+        {% endfor %}
+      </ol>
+    </nav>
+
+    <!-- Search and Pagination -->
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <form method="get" action="/search" class="input-group me-3" style="max-width: 400px;">
+        <input type="hidden" name="prefix" value="{{ prefix }}">
+        <input type="text" name="query" class="form-control" placeholder="Find objects by prefix..." value="{{ search }}">
+        <button class="btn btn-outline-secondary" type="submit">Search</button>
+      </form>
+
+      <div class="d-flex align-items-center gap-2">
+        {% if show_prev %}
+          <a class="btn btn-sm btn-outline-secondary"
+            href="{{ url_for('search' if search_mode else 'index', prefix=prefix, search=search, token=prev_token, page=page-1, limit=limit) }}">&laquo;</a>
+        {% else %}
+          <span class="btn btn-sm btn-outline-secondary disabled">&laquo;</span>
+        {% endif %}
+
+        <span class="mx-2">Page <strong>{{ page }}</strong> of <strong>{{ total_pages }}</strong></span>
+
+        {% if show_next %}
+          <a class="btn btn-sm btn-outline-secondary"
+            href="{{ url_for('search' if search_mode else 'index', prefix=prefix, search=search, token=next_token, page=page+1, limit=limit) }}">&raquo;</a>
+        {% else %}
+          <span class="btn btn-sm btn-outline-secondary disabled">&raquo;</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Total Count -->
+    <div class="mb-2 text-muted">
+      Total files under current folder: <strong>{{ total_count }}</strong>
+    </div>
+
+    <!-- File Table -->
+    <form action="/delete?prefix={{ prefix }}" method="post" onsubmit="return confirmDelete();">
+      <table class="table table-hover bg-white rounded shadow-sm overflow-hidden">
+        <thead class="table-light">
+          <tr>
+            <th style="width: 4%"><input type="checkbox" onclick="toggleAll(this)"></th>
+            <th style="width: 46%">Name</th>
+            <th style="width: 15%">Size</th>
+            <th style="width: 25%">Last Modified</th>
+            <th style="width: 10%">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for file in files %}
+          <tr>
+            <td><input type="checkbox" name="keys" value="{{ file.key }}"></td>
+            <td>
+              <div class="d-flex align-items-center w-100 text-start" style="gap: 6px; line-height: 1.5;">
+                {% if not file.key.endswith('/') and file.key.lower().split('.')[-1] in ['jpg', 'jpeg', 'png', 'gif', 'webp'] %}
+                  <img src="{{ url_for('preview_image', key=file.key) }}" alt="preview"
+                       style="width: 24px; height: 24px; object-fit: cover; margin-right: 6px; border: 1px solid #ccc; border-radius: 2px;"
+                       onmouseenter="showPreview(this.src, this)" onmouseleave="hidePreview()">
+                {% elif file.key.endswith('/') %}
+                  <span style="width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; margin-right: 6px;">📁</span>
+                {% endif %}
+                {% if file.key.endswith('/') %}
+                  <a href="{{ url_for('index', prefix=file.key) }}">
+                    <b>{{ file.key.rstrip('/').split('/')[-1] }}/</b>
+                  </a>
+                {% else %}
+                  {{ file.key.split('/')[-1] }}
+                {% endif %}
+              </div>
+            </td>
+            <td>{{ file.size|humansize }}</td>
+            <td>{{ file.last_modified if file.last_modified else '-' }}</td>
+            <td>
+              {% if not file.key.endswith('/') %}
+                <a href="{{ url_for('download') }}?key={{ file.key }}" class="btn btn-sm btn-primary">Download</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="mt-2 text-muted" id="selectedCountText">Selected: 0</div>
+      <button type="submit" class="btn btn-danger mt-2">Delete Selected</button>
+    </form>
+  </div>
+
+  <!-- New Folder Modal -->
+  <div class="modal" tabindex="-1" id="newFolderModal">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form method="post" action="/create-folder?prefix={{ prefix }}">
+          <div class="modal-header">
+            <h5 class="modal-title">Create New Folder</h5>
+            <button type="button" class="btn-close" onclick="hideNewFolderModal()"></button>
+          </div>
+          <div class="modal-body">
+            <input name="foldername" class="form-control" placeholder="Folder name" required>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="hideNewFolderModal()">Cancel</button>
+            <button type="submit" class="btn btn-primary">Create</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image preview popup -->
+  <div id="previewPopup" style="
+    display: none;
+    position: fixed;
+    border: 1px solid #ccc;
+    background: #fff;
+    padding: 4px;
+    z-index: 9999;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  ">
+    <img id="previewImage" src="" style="max-width: 200px; max-height: 200px;">
+  </div>
+  <!-- JS Scripts -->
+  <script>
+    function toggleAll(source) {
+      const checkboxes = document.querySelectorAll('input[type="checkbox"][name="keys"]');
+      for (let cb of checkboxes) cb.checked = source.checked;
+    }
+
+    function showNewFolderModal() {
+      document.getElementById('newFolderModal').style.display = 'block';
+      document.getElementById('newFolderModal').classList.add('show');
+    }
+
+    function hideNewFolderModal() {
+      document.getElementById('newFolderModal').style.display = 'none';
+      document.getElementById('newFolderModal').classList.remove('show');
+    }
+
+    function uploadWithProgress() {
+      const form = document.getElementById("uploadForm");
+      const fileInput = document.getElementById("uploadInput");
+      if (!fileInput.files.length) return;
+
+      const formData = new FormData();
+      for (let file of fileInput.files) {
+        formData.append("files", file);
+      }
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", form.action, true);
+
+      const wrapper = document.getElementById("uploadProgressWrapper");
+      const bar = document.getElementById("uploadProgressBar");
+
+      wrapper.style.display = "block";
+      bar.style.width = "0%";
+      bar.innerText = "0%";
+
+      xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          bar.style.width = percent + "%";
+          bar.innerText = "Uploading...";
+        }
+      };
+
+      xhr.onload = function () {
+        if (xhr.status === 200) {
+          setTimeout(() => {
+            wrapper.style.display = "none";
+            bar.style.width = "0%";
+            bar.innerText = "0%";
+            window.location.reload();
+          }, 500);
+        } else {
+          bar.classList.remove("bg-success");
+          bar.classList.add("bg-danger");
+          bar.innerText = "Upload failed";
+        }
+      };
+
+      xhr.onerror = function () {
+        bar.classList.remove("bg-success");
+        bar.classList.add("bg-danger");
+        bar.innerText = "Network error";
+      };
+
+      xhr.send(formData);
+    }
+    function confirmDelete() {
+      const checkboxes = document.querySelectorAll('input[name="keys"]:checked');
+      if (!checkboxes.length) return true;
+
+      let hasFolder = false;
+      checkboxes.forEach(cb => {
+        if (cb.value.endsWith('/')) hasFolder = true;
+      });
+
+      if (hasFolder) {
+        return confirm("⚠️ You're deleting at least one folder.\nAre you sure?");
+      }
+      return true;  // allow default submit
+    }
+
+    function showPreview(src, anchorEl) {
+      const popup = document.getElementById("previewPopup");
+      const img = document.getElementById("previewImage");
+      img.src = src;
+
+      const rect = anchorEl.getBoundingClientRect();
+      popup.style.top = (rect.top + window.scrollY + 30) + "px";
+      popup.style.left = (rect.left + window.scrollX + 30) + "px";
+      popup.style.display = "block";
+    }
+
+    function hidePreview() {
+      const popup = document.getElementById("previewPopup");
+      popup.style.display = "none";
+      const img = document.getElementById("previewImage");
+      img.src = "";
+    }
+
+    function updateSelectedCount() {
+      const count = document.querySelectorAll('input[name="keys"]:checked').length;
+      document.getElementById("selectedCountText").innerText = `Selected: ${count}`;
+    }
+
+    document.querySelectorAll('input[name="keys"]').forEach(cb => {
+      cb.addEventListener('change', updateSelectedCount);
+    });
+
+    document.querySelector('input[type="checkbox"][onclick="toggleAll(this)"]')
+      .addEventListener('change', updateSelectedCount);
+  </script>
+</body>
+</html>
